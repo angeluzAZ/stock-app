@@ -13,12 +13,15 @@ Necesita 2 archivos en esta carpeta:
 """
 import os
 import time
+import hmac
+import hashlib
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import streamlit as st
 import gspread
 from gspread_dataframe import set_with_dataframe, get_as_dataframe
 from streamlit_autorefresh import st_autorefresh
+from streamlit_cookies_controller import CookieController
 
 _TZ_ARG = timezone(timedelta(hours=-3))   # hora de Argentina
 _TIMEOUT_SEG = 5 * 60                       # cierre por inactividad: 5 minutos
@@ -261,8 +264,39 @@ def _usuarios():
     except Exception:
         return {}
 
+def _cookie_secret():
+    try:
+        return str(st.secrets["gcp_service_account"]["private_key_id"]) or "x"
+    except Exception:
+        return "local-dev"
+
+def _firma(user):
+    return hmac.new(_cookie_secret().encode(), user.encode(), hashlib.sha256).hexdigest()[:20]
+
+def _token(user):
+    return f"{user}|{_firma(user)}"
+
+def _valida_token(tok):
+    try:
+        user, sig = str(tok).split("|", 1)
+        if hmac.compare_digest(sig, _firma(user)):
+            return user
+    except Exception:
+        pass
+    return None
+
 _USERS = _usuarios()
 if _USERS:  # si hay usuarios configurados (en la nube), se pide login
+    cookies = CookieController()
+    # ── recordar sesión: si al recargar no hay sesión pero hay cookie válida,
+    # se restaura (queda logueado aunque refresques la página) ──
+    if not st.session_state.get("auth_ok"):
+        _u_ck = _valida_token(cookies.get("stk")) if cookies.get("stk") else None
+        if _u_ck and _u_ck.lower() in _USERS:
+            st.session_state["auth_ok"] = True
+            st.session_state["user"] = _u_ck.capitalize()
+            st.session_state["_ultima_act"] = time.time()
+
     if not st.session_state.get("auth_ok"):
         if st.session_state.pop("_msg_timeout", False):
             st.info("Tu sesión se cerró por inactividad (5 minutos). Volvé a entrar.")
@@ -276,6 +310,8 @@ if _USERS:  # si hay usuarios configurados (en la nube), se pide login
                 st.session_state["auth_ok"] = True
                 st.session_state["user"] = u.strip().lower().capitalize()
                 st.session_state["_ultima_act"] = time.time()
+                cookies.set("stk", _token(u.strip().lower()),
+                            expires=datetime.now(_TZ_ARG) + timedelta(hours=8))
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
@@ -289,12 +325,14 @@ if _USERS:  # si hay usuarios configurados (en la nube), se pide login
             st.session_state["_ultima_act"] = ahora     #   → hubo actividad
         st.session_state["_tick"] = tick
         if ahora - st.session_state.get("_ultima_act", ahora) > _TIMEOUT_SEG:
+            cookies.remove("stk")
             st.session_state.clear()
             st.session_state["_msg_timeout"] = True
             st.rerun()
         cabe = st.columns([4, 1])
         cabe[0].caption(f"👤 {st.session_state.get('user', '')}")
         if cabe[1].button("Salir", use_container_width=True):
+            cookies.remove("stk")
             st.session_state.clear()
             st.rerun()
 
