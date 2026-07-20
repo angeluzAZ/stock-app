@@ -1,0 +1,5 @@
+streamlit>=1.37
+gspread>=6.0
+gspread-dataframe>=4.0
+pandas>=2.0
+openpyxl>=3.1
