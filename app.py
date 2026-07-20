@@ -41,6 +41,8 @@ def _dep(cod):
 
 COLS = ["codigo", "descripcion", "adicional", "deposito", "empresa", "stock",
         "cod_prov", "proveedor"]
+# Columnas que baja la app OFFLINE (sin proveedor, para no exponerlo).
+COLS_OFF = ["codigo", "descripcion", "adicional", "deposito", "empresa", "stock"]
 
 
 def _hay_secrets():
@@ -163,7 +165,14 @@ def _rebuild_consulta(sh):
         except Exception:
             pass
     comb = pd.concat(partes, ignore_index=True) if partes else pd.DataFrame(columns=COLS)
-    _escribir_hoja(sh, "CONSULTA", comb[comb["stock"] != 0].copy())
+    con = comb[comb["stock"] != 0].copy()
+    _escribir_hoja(sh, "CONSULTA", con)
+    # CONSULTA_OFF: lo que baja la app OFFLINE del celular. SIN proveedor (privado)
+    # y solo los depósitos que se muestran de cada empresa (HZ:1,9,15,8,7 · AZ:2,5).
+    off = con[con.apply(
+        lambda r: str(r["deposito"]).strip() in DEP_POR_EMPRESA.get(r["empresa"], set()),
+        axis=1)]
+    _escribir_hoja(sh, "CONSULTA_OFF", off[COLS_OFF].copy())
 
 
 def guardar_empresas(dfs_por_empresa, usuario):
@@ -458,21 +467,31 @@ if modo == "🔍 Buscar":
     cards = []
     for cod, g in grupos[:150]:
         g0 = g.iloc[0]
-        emp = " / ".join(sorted(g["empresa"].unique()))
+        emps = sorted(g["empresa"].unique())
+        emp = " / ".join(emps)
         tot = g["stock"].sum()
         badge_cls = "hay" if tot > 0 else "no"
-        gs = g.sort_values("stock", ascending=False)
-        mx = max(1.0, float(gs["stock"].max()))
+        # stock que ya existe por depósito (los que están en 0 no vienen en la planilla)
+        present = {str(r["deposito"]).strip(): float(r["stock"]) for _, r in g.iterrows()}
+        # armar TODOS los depósitos permitidos de la(s) empresa(s), con 0 precargado
+        expected = []
+        for e in emps:
+            for dcod in sorted(DEP_POR_EMPRESA.get(e, set()), key=lambda x: int(x)):
+                if dep_sel != "Todos" and dcod != dep_sel:
+                    continue
+                expected.append((dcod, present.get(dcod, 0.0)))
+        expected.sort(key=lambda x: x[1], reverse=True)     # más stock primero
+        mx = max(1.0, max((s for _, s in expected), default=0.0))
         filas = ""
-        for _, r in gs.iterrows():
-            si = r["stock"] > 0
+        for dcod, stk in expected:
+            si = stk > 0
             cls = "si" if si else "no"
             mk = "✔" if si else "—"
-            w = int(round(r["stock"] / mx * 100)) if si else 0
+            w = int(round(stk / mx * 100)) if si else 0
             filas += (f"<div class='dep {cls}'><span class='mk'>{mk}</span>"
-                      f"<span class='lugar'>{_depname(r['deposito'])}</span>"
+                      f"<span class='lugar'>{_depname(dcod)}</span>"
                       f"<span class='right'><span class='bar'><i style='width:{w}%'></i></span>"
-                      f"<span class='val'>{_num(r['stock'])}</span></span></div>")
+                      f"<span class='val'>{_num(stk)}</span></span></div>")
         adic = f" · {g0['adicional']}" if g0["adicional"] else ""
         cards.append(
             f"<div class='card'><div class='head'><span class='cod'>{cod}</span>"
