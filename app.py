@@ -244,6 +244,12 @@ st.markdown("""
 .pc .chip{font-size:12.5px;font-weight:600;border-radius:20px;padding:3px 11px;white-space:nowrap}
 .pc .chip.ok{background:#dff3ea;color:#14805c}
 .pc .chip.zero{background:#eef2f6;color:#94a3b8}
+/* buscador grande y cómodo */
+div[data-testid="stTextInput"] input{
+  font-size:19px !important; padding:14px 16px !important; height:auto !important;
+  border-radius:12px !important;
+}
+div[data-testid="stTextInput"] label p{font-size:15px !important; font-weight:600;}
 </style>
 """, unsafe_allow_html=True)
 st.title("📦 Stock HZ + AZ")
