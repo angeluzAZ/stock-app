@@ -12,10 +12,13 @@ Necesita 2 archivos en esta carpeta:
 - Actualizar: subir el Excel de stock; reemplaza esa pestaña (HZ o AZ) en la nube.
 """
 import os
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import streamlit as st
 import gspread
 from gspread_dataframe import set_with_dataframe, get_as_dataframe
+
+_TZ_ARG = timezone(timedelta(hours=-3))   # hora de Argentina
 
 st.set_page_config(page_title="Stock HZ + AZ", page_icon="📦", layout="centered")
 AQUI = os.path.dirname(os.path.abspath(__file__))
@@ -140,23 +143,85 @@ def _escribir_hoja(sh, nombre, df):
     ws.update(valores, value_input_option="RAW")
 
 
-def guardar_en_sheets(empresa, df):
-    """Escribe la pestaña de la empresa (HZ/AZ) con TODO su stock, y reconstruye
-    la pestaña CONSULTA (solo stock != 0, ambas empresas) que lee la app Android
-    → el celular queda siempre al día sin manejar 136k filas."""
+def _rebuild_consulta(sh):
+    """Reconstruye la pestaña CONSULTA (solo stock != 0, ambas empresas) leyendo
+    HZ y AZ de la planilla. Es lo que lee la app en el celular (rápido, ~25k)."""
+    partes = []
+    for hoja in ("HZ", "AZ"):
+        try:
+            d = get_as_dataframe(sh.worksheet(hoja), header=0).dropna(how="all")
+            d["stock"] = pd.to_numeric(d.get("stock", 0), errors="coerce").fillna(0)
+            partes.append(d[[c for c in COLS if c in d.columns]])
+        except Exception:
+            pass
+    comb = pd.concat(partes, ignore_index=True) if partes else pd.DataFrame(columns=COLS)
+    _escribir_hoja(sh, "CONSULTA", comb[comb["stock"] != 0].copy())
+
+
+def guardar_empresas(dfs_por_empresa, usuario):
+    """dfs_por_empresa: dict {'HZ': df, 'AZ': df} (una o las dos). Escribe cada
+    pestaña, reconstruye CONSULTA UNA sola vez y registra fecha/hora + usuario."""
     sh = _abrir_planilla()
-    _escribir_hoja(sh, empresa, df)
-    # la otra empresa: la leo de la planilla para combinar
-    otra = "AZ" if empresa == "HZ" else "HZ"
+    for emp, df in dfs_por_empresa.items():
+        _escribir_hoja(sh, emp, df)
+    _rebuild_consulta(sh)
+    detalle = " + ".join(f"{e} ({len(d):,} filas)" for e, d in dfs_por_empresa.items())
+    return _escribir_meta(sh, usuario, detalle)
+
+
+def _escribir_meta(sh, usuario, detalle):
+    ahora = datetime.now(_TZ_ARG).strftime("%d/%m/%Y %H:%M")
     try:
-        od = get_as_dataframe(sh.worksheet(otra), header=0).dropna(how="all")
-        od["stock"] = pd.to_numeric(od.get("stock", 0), errors="coerce").fillna(0)
-        od = od[[c for c in COLS if c in od.columns]]
+        ws = sh.worksheet("META")
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title="META", rows=5, cols=3)
+    ws.clear()
+    ws.update([["fecha", "usuario", "detalle"], [ahora, usuario, detalle]],
+              value_input_option="RAW")
+    return ahora
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def leer_meta():
+    """Última actualización: (fecha, usuario, detalle) o None."""
+    try:
+        sh = _abrir_planilla()
+        vals = sh.worksheet("META").get_all_values()
+        if len(vals) >= 2 and any(vals[1]):
+            f, u, d = (vals[1] + ["", "", ""])[:3]
+            return f, u, d
     except Exception:
-        od = pd.DataFrame(columns=COLS)
-    combinado = pd.concat([df, od], ignore_index=True)
-    consulta = combinado[combinado["stock"] != 0].copy()
-    _escribir_hoja(sh, "CONSULTA", consulta)
+        pass
+    return None
+
+
+def _leer_stock_excel(archivo, emp_cod):
+    """Lee un Excel de STOCK POR DEPÓSITO y devuelve el df normalizado con
+    proveedor. Lanza ValueError con mensaje claro si el archivo no sirve."""
+    col_pref = "Saldo control stock" if emp_cod == "HZ" else "Saldo stock"
+    try:
+        raw = pd.read_excel(archivo, sheet_name="Datos")
+    except Exception:
+        raw = pd.read_excel(archivo)
+    if "Cód. Artículo" not in raw.columns or "Cód. Depósito" not in raw.columns:
+        raise ValueError(f"{emp_cod}: al Excel le faltan columnas. ¿Es el export de STOCK POR DEPÓSITO?")
+    col_saldo = col_pref if col_pref in raw.columns else next(
+        (c for c in raw.columns if str(c).lower().startswith("saldo")), None)
+    if not col_saldo:
+        raise ValueError(f"{emp_cod}: no encontré la columna de saldo/stock.")
+    nuevo = pd.DataFrame({
+        "codigo": raw["Cód. Artículo"].astype(str).str.strip(),
+        "descripcion": raw.get("Descripción", "").fillna("").astype(str).str.strip(),
+        "adicional": raw.get("Desc. Adicional", "").fillna("").astype(str).str.strip(),
+        "deposito": raw["Cód. Depósito"].astype(str).str.strip(),
+        "empresa": emp_cod,
+        "stock": pd.to_numeric(raw[col_saldo], errors="coerce").fillna(0),
+    })
+    m = mapa_proveedores()
+    nuevo = nuevo.merge(m, on="codigo", how="left")
+    nuevo["cod_prov"] = nuevo["cod_prov"].fillna("")
+    nuevo["proveedor"] = nuevo["proveedor"].fillna("Sin proveedor")
+    return nuevo[COLS]
 
 
 # ─────────────────────────── APP ───────────────────────────────────
@@ -217,6 +282,12 @@ if faltan:
         st.markdown(f"- {f}")
     st.info("Ponelos en la misma carpeta que `app.py` y recargá la página.")
     st.stop()
+
+_meta = leer_meta()
+if _meta:
+    st.caption(f"🕒 Última actualización: **{_meta[0]}** · por **{_meta[1].capitalize()}** ({_meta[2]})")
+else:
+    st.caption("🕒 Sin actualizaciones registradas todavía.")
 
 modo = st.radio("¿Qué querés hacer?", ["🔍 Buscar", "⬆️ Actualizar (subir Excel)"],
                 horizontal=True, label_visibility="collapsed")
@@ -290,49 +361,32 @@ if modo == "🔍 Buscar":
 # ─────────────────────────── ACTUALIZAR ────────────────────────────
 else:
     st.subheader("⬆️ Actualizar stock")
-    st.write("Subí el **Excel de stock** exportado de Tango. Reemplaza los datos de esa "
-             "empresa en la planilla (la otra empresa no se toca). El último que sube, queda.")
-    emp = st.radio("¿De qué empresa es este archivo?", ["HZ (Horizonte)", "AZ (Años Luz)"],
-                   horizontal=True)
-    emp_cod = "HZ" if emp.startswith("HZ") else "AZ"
-    col_saldo_pref = "Saldo control stock" if emp_cod == "HZ" else "Saldo stock"
+    st.write("Subí los **Excel de stock** de Tango. Podés subir **los dos a la vez** "
+             "(Horizonte y Años Luz) o solo uno. El último que sube, queda.")
+    c1, c2 = st.columns(2)
+    arch_hz = c1.file_uploader("📄 Horizonte (HZ)", type=["xlsx"], key="up_hz")
+    arch_az = c2.file_uploader("📄 Años Luz (AZ)", type=["xlsx"], key="up_az")
 
-    archivo = st.file_uploader("Excel de stock (.xlsx)", type=["xlsx"])
-    if archivo is not None:
+    # leer y previsualizar lo que se haya subido
+    a_guardar, errores = {}, []
+    for arch, emp_cod in [(arch_hz, "HZ"), (arch_az, "AZ")]:
+        if arch is None:
+            continue
         try:
-            raw = pd.read_excel(archivo, sheet_name="Datos")
-        except Exception:
-            raw = pd.read_excel(archivo)
-        if "Cód. Artículo" not in raw.columns or "Cód. Depósito" not in raw.columns:
-            st.error("El Excel no tiene las columnas esperadas. ¿Es el export de STOCK POR DEPÓSITO?")
-            st.stop()
-        col_saldo = col_saldo_pref if col_saldo_pref in raw.columns else next(
-            (c for c in raw.columns if str(c).lower().startswith("saldo")), None)
-        if not col_saldo:
-            st.error("No encontré la columna de saldo/stock en el Excel.")
-            st.stop()
+            df = _leer_stock_excel(arch, emp_cod)
+            a_guardar[emp_cod] = df
+            st.success(f"{emp_cod}: {len(df):,} filas · {df['stock'].ne(0).sum():,} con stock.")
+        except Exception as e:
+            errores.append(str(e))
+    for e in errores:
+        st.error(e)
 
-        nuevo = pd.DataFrame({
-            "codigo": raw["Cód. Artículo"].astype(str).str.strip(),
-            "descripcion": raw.get("Descripción", "").fillna("").astype(str).str.strip(),
-            "adicional": raw.get("Desc. Adicional", "").fillna("").astype(str).str.strip(),
-            "deposito": raw["Cód. Depósito"].astype(str).str.strip(),
-            "empresa": emp_cod,
-            "stock": pd.to_numeric(raw[col_saldo], errors="coerce").fillna(0),
-        })
-        m = mapa_proveedores()
-        nuevo = nuevo.merge(m, on="codigo", how="left")
-        nuevo["cod_prov"] = nuevo["cod_prov"].fillna("")
-        nuevo["proveedor"] = nuevo["proveedor"].fillna("Sin proveedor")
-        nuevo = nuevo[COLS]
-
-        st.success(f"Archivo leído: {len(nuevo):,} filas · {nuevo['stock'].ne(0).sum():,} con stock.")
-        st.dataframe(nuevo.head(15), hide_index=True, use_container_width=True)
-
-        if st.button(f"✅ Guardar en la nube (pestaña {emp_cod})", type="primary"):
-            with st.spinner("Subiendo a Google Sheets… puede tardar (son muchas filas)."):
-                guardar_en_sheets(emp_cod, nuevo)
-            cargar_consulta.clear()
-            cargar_todo.clear()
-            st.success(f"¡Listo! Se actualizó el stock de {emp_cod} en la nube. Todos lo ven ya.")
-            st.balloons()
+    puede = bool(a_guardar) and not errores
+    if st.button("✅ Guardar en la nube", type="primary", disabled=not puede):
+        usuario = st.session_state.get("user", "—")
+        with st.spinner("Subiendo a Google Sheets… puede tardar (son muchas filas)."):
+            ts = guardar_empresas(a_guardar, usuario)
+        cargar_consulta.clear(); cargar_todo.clear(); leer_meta.clear()
+        st.success(f"¡Listo! Actualizado: {', '.join(a_guardar)} · {ts} · por {usuario}. "
+                   "Todos lo ven ya.")
+        st.balloons()
