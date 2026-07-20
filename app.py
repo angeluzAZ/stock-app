@@ -82,14 +82,23 @@ def cargar_stock():
     return df[COLS]
 
 
-@st.cache_data
+@st.cache_data(ttl=3600, show_spinner=False)
 def mapa_proveedores():
+    """Mapa artículo→proveedor. En la nube vive en la pestaña PROVEEDORES de la
+    planilla (privada); en local, si existe, usa proveedores.csv."""
     p = os.path.join(AQUI, "proveedores.csv")
     if os.path.exists(p):
         m = pd.read_csv(p, dtype=str).fillna("")
         m["codigo"] = m["codigo"].str.strip()
         return m
-    return pd.DataFrame(columns=["codigo", "cod_prov", "proveedor"])
+    try:
+        sh = _abrir_planilla()
+        m = get_as_dataframe(sh.worksheet("PROVEEDORES"), header=0).dropna(how="all")
+        for c in ("codigo", "cod_prov", "proveedor"):
+            m[c] = m[c].fillna("").astype(str).str.strip() if c in m.columns else ""
+        return m[["codigo", "cod_prov", "proveedor"]]
+    except Exception:
+        return pd.DataFrame(columns=["codigo", "cod_prov", "proveedor"])
 
 
 def _escribir_hoja(sh, nombre, df):
