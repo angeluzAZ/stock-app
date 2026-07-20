@@ -180,6 +180,36 @@ st.markdown("""
 """, unsafe_allow_html=True)
 st.title("📦 Stock HZ + AZ")
 
+# ─────────────────────────── LOGIN ─────────────────────────────────
+def _usuarios():
+    try:
+        return {str(k).lower(): str(v) for k, v in dict(st.secrets.get("usuarios", {})).items()}
+    except Exception:
+        return {}
+
+_USERS = _usuarios()
+if _USERS:  # si hay usuarios configurados (en la nube), se pide login
+    if not st.session_state.get("auth_ok"):
+        st.subheader("🔒 Iniciar sesión")
+        with st.form("login"):
+            u = st.text_input("Usuario")
+            p = st.text_input("Contraseña", type="password")
+            entrar = st.form_submit_button("Entrar", type="primary")
+        if entrar:
+            if _USERS.get(u.strip().lower()) == p:
+                st.session_state["auth_ok"] = True
+                st.session_state["user"] = u.strip().lower().capitalize()
+                st.rerun()
+            else:
+                st.error("Usuario o contraseña incorrectos.")
+        st.stop()
+    else:
+        cabe = st.columns([4, 1])
+        cabe[0].caption(f"👤 {st.session_state.get('user', '')}")
+        if cabe[1].button("Salir", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
+
 faltan = _faltan_archivos()
 if faltan:
     st.error("Faltan archivos de configuración en la carpeta de la app:")
