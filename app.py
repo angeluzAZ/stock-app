@@ -63,15 +63,7 @@ def _abrir_planilla():
     return gc.open_by_url(url)
 
 
-@st.cache_data(ttl=120, show_spinner="Leyendo stock…")
-def cargar_stock():
-    """Lee la pestaña CONSULTA (solo lo que tiene stock, ~25k → rápido en el
-    celular). El Streamlit la mantiene al día cada vez que alguien sube un Excel."""
-    sh = _abrir_planilla()
-    try:
-        df = get_as_dataframe(sh.worksheet("CONSULTA"), header=0).dropna(how="all")
-    except Exception:
-        return pd.DataFrame(columns=COLS)
+def _limpiar(df):
     for c in COLS:
         if c not in df.columns:
             df[c] = ""
@@ -80,6 +72,35 @@ def cargar_stock():
     for c in ("descripcion", "adicional", "proveedor", "deposito", "empresa", "cod_prov"):
         df[c] = df[c].fillna("").astype(str)
     return df[COLS]
+
+
+@st.cache_data(ttl=300, show_spinner="Leyendo stock…")
+def cargar_consulta():
+    """Solo lo que tiene stock (~25k) → rápido. Es el modo por defecto."""
+    sh = _abrir_planilla()
+    try:
+        df = get_as_dataframe(sh.worksheet("CONSULTA"), header=0).dropna(how="all")
+    except Exception:
+        return pd.DataFrame(columns=COLS)
+    return _limpiar(df)
+
+
+@st.cache_data(ttl=600, show_spinner="Leyendo TODO el stock (incluye los que están en 0)…")
+def cargar_todo():
+    """TODOS los artículos y depósitos, incluidos los que están en 0 (~136k).
+    Más lento la primera vez, pero permite ver el stock en cero."""
+    sh = _abrir_planilla()
+    partes = []
+    for hoja in ("HZ", "AZ"):
+        try:
+            d = get_as_dataframe(sh.worksheet(hoja), header=0).dropna(how="all")
+            if not d.empty:
+                partes.append(d)
+        except Exception:
+            pass
+    if not partes:
+        return pd.DataFrame(columns=COLS)
+    return _limpiar(pd.concat(partes, ignore_index=True))
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -139,6 +160,24 @@ def guardar_en_sheets(empresa, df):
 
 
 # ─────────────────────────── APP ───────────────────────────────────
+st.markdown("""
+<style>
+#MainMenu, footer {visibility:hidden;}
+.block-container {padding-top:1.2rem; max-width:720px;}
+.pc{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:11px 14px;
+    margin-bottom:10px;box-shadow:0 1px 3px rgba(13,27,42,.06);}
+.pc-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.pc .cod{font-family:ui-monospace,Consolas,monospace;font-weight:700;font-size:16px;color:#0d1b2a}
+.pc .tot{font-weight:800;font-size:14px;white-space:nowrap}
+.pc .tot.hay{color:#14805c}.pc .tot.no{color:#94a3b8}
+.pc .desc{font-size:14px;color:#0d1b2a;margin:1px 0;line-height:1.3}
+.pc .prov{font-size:12px;color:#64748b;margin:2px 0 7px}
+.pc .deps{display:flex;flex-wrap:wrap;gap:6px}
+.pc .chip{font-size:12.5px;font-weight:600;border-radius:20px;padding:3px 11px;white-space:nowrap}
+.pc .chip.ok{background:#dff3ea;color:#14805c}
+.pc .chip.zero{background:#eef2f6;color:#94a3b8}
+</style>
+""", unsafe_allow_html=True)
 st.title("📦 Stock HZ + AZ")
 
 faltan = _faltan_archivos()
@@ -153,50 +192,70 @@ modo = st.radio("¿Qué querés hacer?", ["🔍 Buscar", "⬆️ Actualizar (sub
                 horizontal=True, label_visibility="collapsed")
 
 # ─────────────────────────── BUSCAR ────────────────────────────────
+def _num(v):
+    v = float(v)
+    return f"{v:,.0f}" if v == int(v) else f"{v:,.1f}"
+
+def _depname(cod):
+    return DEPOSITOS.get(str(cod), f"Dep {cod}")
+
 if modo == "🔍 Buscar":
+    incluir_ceros = st.toggle("Incluir productos sin stock (más lento)", value=False,
+                              help="Mostrá también los artículos y depósitos que están en 0.")
     try:
-        stock = cargar_stock()
+        stock = cargar_todo() if incluir_ceros else cargar_consulta()
     except Exception as e:
-        st.error(f"No pude leer la planilla. Revisá que credenciales.json y planilla.txt "
-                 f"sean correctos y que compartiste la planilla con el mail del robot.\n\n{e}")
+        st.error(f"No pude leer la planilla. Revisá las credenciales y que compartiste la "
+                 f"planilla con el mail del robot.\n\n{e}")
         st.stop()
     if stock.empty:
         st.warning("La planilla está vacía. Andá a «Actualizar» y subí el Excel de stock.")
         st.stop()
 
     q = st.text_input("Buscar", placeholder="Código, descripción, adicional o proveedor…")
-    c1, c2 = st.columns(2)
     deps = ["Todos"] + sorted(stock["deposito"].unique().tolist())
-    dep_sel = c1.selectbox("Depósito", deps,
+    dep_sel = st.selectbox("Depósito", deps,
                            format_func=lambda x: "Todos" if x == "Todos" else _dep(x))
-    solo_con = c2.toggle("Solo con stock", value=True)
 
-    d = stock
-    if dep_sel != "Todos":
-        d = d[d["deposito"] == dep_sel]
-    if solo_con:
-        d = d[d["stock"] != 0]
     if not q.strip():
-        st.info("Escribí algo para buscar.")
+        st.info("Escribí un código, descripción, adicional o proveedor para buscar.")
         st.stop()
     t = q.strip().lower()
-    m = (d["codigo"].str.lower().str.contains(t, na=False) |
-         d["descripcion"].str.lower().str.contains(t, na=False) |
-         d["adicional"].str.lower().str.contains(t, na=False) |
-         d["proveedor"].str.lower().str.contains(t, na=False))
-    d = d[m]
+    m = (stock["codigo"].str.lower().str.contains(t, na=False) |
+         stock["descripcion"].str.lower().str.contains(t, na=False) |
+         stock["adicional"].str.lower().str.contains(t, na=False) |
+         stock["proveedor"].str.lower().str.contains(t, na=False))
+    d = stock[m]
+    if dep_sel != "Todos":
+        d = d[d["deposito"] == dep_sel]
 
-    st.caption(f"{len(d):,} resultado(s)")
     if d.empty:
-        st.warning("Sin resultados. Si el producto existe pero está en 0, destildá «Solo con stock».")
-    else:
-        vista = pd.DataFrame({
-            "Código": d["codigo"], "Descripción": d["descripcion"],
-            "Adicional": d["adicional"], "Proveedor": d["proveedor"],
-            "Depósito": d["deposito"].map(_dep), "Empresa": d["empresa"], "Stock": d["stock"],
-        }).sort_values(["Código", "Depósito"])
-        st.dataframe(vista, hide_index=True, use_container_width=True,
-                     column_config={"Stock": st.column_config.NumberColumn(format="%.0f")})
+        st.warning("Sin resultados. Si el producto puede estar en 0, activá arriba "
+                   "«Incluir productos sin stock».")
+        st.stop()
+
+    # una tarjeta por artículo; los de más stock, primero
+    grupos = list(d.groupby(["empresa", "codigo"], sort=False))
+    grupos.sort(key=lambda kv: kv[1]["stock"].sum(), reverse=True)
+    st.caption(f"{len(grupos):,} producto(s)" + (" · mostrando los primeros 150" if len(grupos) > 150 else ""))
+
+    cards = []
+    for (emp, cod), g in grupos[:150]:
+        g0 = g.iloc[0]
+        tot = g["stock"].sum()
+        tot_cls = "hay" if tot > 0 else "no"
+        chips = ""
+        for _, r in g.sort_values("stock", ascending=False).iterrows():
+            cls = "ok" if r["stock"] > 0 else "zero"
+            chips += f"<span class='chip {cls}'>{_depname(r['deposito'])}: {_num(r['stock'])}</span>"
+        adic = f" · {g0['adicional']}" if g0["adicional"] else ""
+        cards.append(
+            f"<div class='pc'><div class='pc-top'><span class='cod'>{cod}</span>"
+            f"<span class='tot {tot_cls}'>{_num(tot)} u</span></div>"
+            f"<div class='desc'>{g0['descripcion']}{adic}</div>"
+            f"<div class='prov'>{g0['proveedor']} · {emp}</div>"
+            f"<div class='deps'>{chips}</div></div>")
+    st.markdown("".join(cards), unsafe_allow_html=True)
 
 # ─────────────────────────── ACTUALIZAR ────────────────────────────
 else:
@@ -243,6 +302,7 @@ else:
         if st.button(f"✅ Guardar en la nube (pestaña {emp_cod})", type="primary"):
             with st.spinner("Subiendo a Google Sheets… puede tardar (son muchas filas)."):
                 guardar_en_sheets(emp_cod, nuevo)
-            cargar_stock.clear()
+            cargar_consulta.clear()
+            cargar_todo.clear()
             st.success(f"¡Listo! Se actualizó el stock de {emp_cod} en la nube. Todos lo ven ya.")
             st.balloons()
