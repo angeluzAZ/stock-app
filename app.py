@@ -33,6 +33,8 @@ URL_FILE = os.path.join(AQUI, "planilla.txt")
 
 DEPOSITOS = {"1": "HERAS", "9": "ALTO", "15": "PERICO", "7": "Pulmón rollos",
              "8": "Central", "2": "URDI", "5": "NECO"}
+# Qué depósitos se muestran de cada empresa (los demás se ocultan).
+DEP_POR_EMPRESA = {"HZ": {"1", "9", "15", "8", "7"}, "AZ": {"2", "5"}}
 def _dep(cod):
     n = DEPOSITOS.get(str(cod))
     return f"{cod} · {n}" if n else str(cod)
@@ -421,6 +423,11 @@ if modo == "🔍 Buscar":
         st.warning("La planilla está vacía. Andá a «Actualizar» y subí el Excel de stock.")
         st.stop()
 
+    # solo los depósitos que corresponden a cada empresa (HZ: 1,9,15,8,7 · AZ: 2,5)
+    stock = stock[stock.apply(
+        lambda r: str(r["deposito"]).strip() in DEP_POR_EMPRESA.get(r["empresa"], set()),
+        axis=1)]
+
     q = st.text_input("Buscar", placeholder="Código, descripción, adicional o proveedor…")
     deps = ["Todos"] + sorted(stock["deposito"].unique().tolist())
     dep_sel = st.selectbox("Depósito", deps,
@@ -443,14 +450,15 @@ if modo == "🔍 Buscar":
                    "«Incluir productos sin stock».")
         st.stop()
 
-    # una tarjeta por artículo; los de más stock, primero
-    grupos = list(d.groupby(["empresa", "codigo"], sort=False))
+    # una tarjeta por código (aunque esté en las dos empresas); más stock primero
+    grupos = list(d.groupby("codigo", sort=False))
     grupos.sort(key=lambda kv: kv[1]["stock"].sum(), reverse=True)
     st.caption(f"{len(grupos):,} producto(s)" + (" · mostrando los primeros 150" if len(grupos) > 150 else ""))
 
     cards = []
-    for (emp, cod), g in grupos[:150]:
+    for cod, g in grupos[:150]:
         g0 = g.iloc[0]
+        emp = " / ".join(sorted(g["empresa"].unique()))
         tot = g["stock"].sum()
         badge_cls = "hay" if tot > 0 else "no"
         gs = g.sort_values("stock", ascending=False)
