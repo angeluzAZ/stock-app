@@ -231,28 +231,68 @@ def _leer_stock_excel(archivo, emp_cod):
 
 
 # ─────────────────────────── APP ───────────────────────────────────
-st.markdown("""
+# Tamaño de letra (accesibilidad): multiplicador --tam aplicado a las tarjetas.
+_TAMS = {"A": 1.0, "A+": 1.25, "A++": 1.55}
+_tam = _TAMS.get(st.session_state.get("_tam_sel", "A"), 1.0)
+
+st.markdown(f"""
 <style>
-#MainMenu, footer {visibility:hidden;}
-.block-container {padding-top:1.2rem; max-width:720px;}
-.pc{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:11px 14px;
-    margin-bottom:10px;box-shadow:0 1px 3px rgba(13,27,42,.06);}
-.pc-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
-.pc .cod{font-family:ui-monospace,Consolas,monospace;font-weight:700;font-size:16px;color:#0d1b2a}
-.pc .tot{font-weight:800;font-size:14px;white-space:nowrap}
-.pc .tot.hay{color:#14805c}.pc .tot.no{color:#94a3b8}
-.pc .desc{font-size:14px;color:#0d1b2a;margin:1px 0;line-height:1.3}
-.pc .prov{font-size:12px;color:#64748b;margin:2px 0 7px}
-.pc .deps{display:flex;flex-wrap:wrap;gap:6px}
-.pc .chip{font-size:12.5px;font-weight:600;border-radius:20px;padding:3px 11px;white-space:nowrap}
-.pc .chip.ok{background:#dff3ea;color:#14805c}
-.pc .chip.zero{background:#eef2f6;color:#94a3b8}
+:root{{
+  --tam:{_tam};
+  --bg:#eef1f8; --surface:#ffffff; --surface-2:#f6f8fc;
+  --ink:#0f172a; --ink-soft:#586074; --line:#e2e7f0;
+  --acc:#2f6bff; --acc-2:#5b8cff; --acc-soft:#e8f0ff;
+  --verde:#067a4e; --verde-bg:#dcf5e9; --verde-bar:#18b877;
+  --rojo:#c23b22; --rojo-bg:#fbe6e1;
+  --sombra:0 1px 2px rgba(15,23,42,.06), 0 14px 34px -22px rgba(15,23,42,.28);
+}}
+@media (prefers-color-scheme:dark){{:root{{
+  --bg:#090d18; --surface:#141a2b; --surface-2:#1b2236;
+  --ink:#eef2fb; --ink-soft:#9aa6c2; --line:#28324a;
+  --acc:#5b8cff; --acc-2:#7aa2ff; --acc-soft:#1a2540;
+  --verde:#38e08e; --verde-bg:#123024; --verde-bar:#34d399;
+  --rojo:#ff7a63; --rojo-bg:#3a1a14;
+  --sombra:0 1px 2px rgba(0,0,0,.4), 0 18px 40px -22px rgba(0,0,0,.7);
+}}}}
+#MainMenu, footer {{visibility:hidden;}}
+.stApp{{background:var(--bg);}}
+.block-container {{padding-top:1.1rem; max-width:640px;}}
+
 /* buscador grande y cómodo */
-div[data-testid="stTextInput"] input{
-  font-size:19px !important; padding:14px 16px !important; height:auto !important;
-  border-radius:12px !important;
-}
-div[data-testid="stTextInput"] label p{font-size:15px !important; font-weight:600;}
+div[data-testid="stTextInput"] input{{
+  font-size:calc(20px*var(--tam)) !important; font-weight:600 !important;
+  padding:16px 18px !important; height:auto !important;
+  border-radius:16px !important; box-shadow:var(--sombra);
+}}
+div[data-testid="stTextInput"] label p{{font-size:calc(15px*var(--tam)) !important; font-weight:700;}}
+
+/* tarjeta de producto (diseño moderno) */
+.card{{background:var(--surface);border:1px solid var(--line);border-radius:20px;
+  padding:calc(15px*var(--tam)) 17px;margin-bottom:14px;box-shadow:var(--sombra);}}
+.card .head{{display:flex;align-items:center;justify-content:space-between;gap:10px;}}
+.card .cod{{font-family:ui-monospace,Consolas,monospace;font-weight:800;
+  font-size:calc(14px*var(--tam));letter-spacing:1.2px;color:var(--ink-soft);}}
+.card .badge{{display:flex;align-items:baseline;gap:5px;padding:7px 13px;border-radius:14px;font-weight:900;white-space:nowrap;}}
+.card .badge .n{{font-size:calc(23px*var(--tam));}}
+.card .badge .u{{font-size:calc(11px*var(--tam));font-weight:800;text-transform:uppercase;letter-spacing:.05em;}}
+.card .badge.hay{{background:var(--verde-bg);color:var(--verde);}}
+.card .badge.no{{background:var(--rojo-bg);color:var(--rojo);}}
+.card .desc{{font-size:calc(19px*var(--tam));font-weight:700;color:var(--ink);margin:9px 0 3px;line-height:1.25;}}
+.card .prov{{font-size:calc(14px*var(--tam));color:var(--ink-soft);font-weight:600;
+  margin-bottom:11px;display:flex;align-items:center;gap:7px;}}
+.card .prov .dot{{width:8px;height:8px;border-radius:50%;background:var(--acc);flex:none;}}
+.card .deps{{display:flex;flex-direction:column;gap:8px;}}
+.card .dep{{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:11px;
+  padding:calc(10px*var(--tam)) 13px;border-radius:12px;background:var(--surface-2);}}
+.card .dep .mk{{font-size:calc(18px*var(--tam));width:calc(22px*var(--tam));text-align:center;}}
+.card .dep.si .mk{{color:var(--verde);}} .card .dep.no .mk{{color:var(--ink-soft);opacity:.6;}}
+.card .dep .lugar{{font-weight:700;font-size:calc(16px*var(--tam));color:var(--ink);}}
+.card .dep .right{{display:flex;align-items:center;gap:11px;justify-content:flex-end;}}
+.card .bar{{width:calc(70px*var(--tam));height:9px;border-radius:6px;background:var(--line);overflow:hidden;}}
+.card .bar > i{{display:block;height:100%;border-radius:6px;background:var(--verde-bar);}}
+.card .dep .val{{font-family:ui-monospace,Consolas,monospace;font-weight:900;
+  font-size:calc(19px*var(--tam));min-width:calc(42px*var(--tam));text-align:right;}}
+.card .dep.si .val{{color:var(--verde);}} .card .dep.no .val{{color:var(--ink-soft);}}
 </style>
 """, unsafe_allow_html=True)
 st.title("📦 Stock HZ + AZ")
@@ -350,8 +390,15 @@ if _meta:
 else:
     st.caption("🕒 Sin actualizaciones registradas todavía.")
 
-modo = st.radio("¿Qué querés hacer?", ["🔍 Buscar", "⬆️ Actualizar (subir Excel)"],
-                horizontal=True, label_visibility="collapsed")
+cm1, cm2 = st.columns([3, 2])
+with cm2:
+    st.radio(
+        "Tamaño de letra", list(_TAMS.keys()), key="_tam_sel",
+        horizontal=True, label_visibility="collapsed",
+        help="Agrandá el texto de las tarjetas (A+ / A++).")
+with cm1:
+    modo = st.radio("¿Qué querés hacer?", ["🔍 Buscar", "⬆️ Actualizar (subir Excel)"],
+                    horizontal=True, label_visibility="collapsed")
 
 # ─────────────────────────── BUSCAR ────────────────────────────────
 def _num(v):
@@ -405,18 +452,26 @@ if modo == "🔍 Buscar":
     for (emp, cod), g in grupos[:150]:
         g0 = g.iloc[0]
         tot = g["stock"].sum()
-        tot_cls = "hay" if tot > 0 else "no"
-        chips = ""
-        for _, r in g.sort_values("stock", ascending=False).iterrows():
-            cls = "ok" if r["stock"] > 0 else "zero"
-            chips += f"<span class='chip {cls}'>{_depname(r['deposito'])}: {_num(r['stock'])}</span>"
+        badge_cls = "hay" if tot > 0 else "no"
+        gs = g.sort_values("stock", ascending=False)
+        mx = max(1.0, float(gs["stock"].max()))
+        filas = ""
+        for _, r in gs.iterrows():
+            si = r["stock"] > 0
+            cls = "si" if si else "no"
+            mk = "✔" if si else "—"
+            w = int(round(r["stock"] / mx * 100)) if si else 0
+            filas += (f"<div class='dep {cls}'><span class='mk'>{mk}</span>"
+                      f"<span class='lugar'>{_depname(r['deposito'])}</span>"
+                      f"<span class='right'><span class='bar'><i style='width:{w}%'></i></span>"
+                      f"<span class='val'>{_num(r['stock'])}</span></span></div>")
         adic = f" · {g0['adicional']}" if g0["adicional"] else ""
         cards.append(
-            f"<div class='pc'><div class='pc-top'><span class='cod'>{cod}</span>"
-            f"<span class='tot {tot_cls}'>{_num(tot)} u</span></div>"
+            f"<div class='card'><div class='head'><span class='cod'>{cod}</span>"
+            f"<span class='badge {badge_cls}'><span class='n'>{_num(tot)}</span><span class='u'>u</span></span></div>"
             f"<div class='desc'>{g0['descripcion']}{adic}</div>"
-            f"<div class='prov'>{g0['proveedor']} · {emp}</div>"
-            f"<div class='deps'>{chips}</div></div>")
+            f"<div class='prov'><span class='dot'></span>{g0['proveedor']} · {emp}</div>"
+            f"<div class='deps'>{filas}</div></div>")
     st.markdown("".join(cards), unsafe_allow_html=True)
 
 # ─────────────────────────── ACTUALIZAR ────────────────────────────
