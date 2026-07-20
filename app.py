@@ -12,13 +12,16 @@ Necesita 2 archivos en esta carpeta:
 - Actualizar: subir el Excel de stock; reemplaza esa pestaña (HZ o AZ) en la nube.
 """
 import os
+import time
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import streamlit as st
 import gspread
 from gspread_dataframe import set_with_dataframe, get_as_dataframe
+from streamlit_autorefresh import st_autorefresh
 
 _TZ_ARG = timezone(timedelta(hours=-3))   # hora de Argentina
+_TIMEOUT_SEG = 5 * 60                       # cierre por inactividad: 5 minutos
 
 st.set_page_config(page_title="Stock HZ + AZ", page_icon="📦", layout="centered")
 AQUI = os.path.dirname(os.path.abspath(__file__))
@@ -255,6 +258,8 @@ def _usuarios():
 _USERS = _usuarios()
 if _USERS:  # si hay usuarios configurados (en la nube), se pide login
     if not st.session_state.get("auth_ok"):
+        if st.session_state.pop("_msg_timeout", False):
+            st.info("Tu sesión se cerró por inactividad (5 minutos). Volvé a entrar.")
         st.subheader("🔒 Iniciar sesión")
         with st.form("login"):
             u = st.text_input("Usuario")
@@ -264,11 +269,23 @@ if _USERS:  # si hay usuarios configurados (en la nube), se pide login
             if _USERS.get(u.strip().lower()) == p:
                 st.session_state["auth_ok"] = True
                 st.session_state["user"] = u.strip().lower().capitalize()
+                st.session_state["_ultima_act"] = time.time()
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
         st.stop()
     else:
+        # ── temporizador de inactividad: se cierra sola tras 5 min sin usarla,
+        # pero cada interacción (buscar, actualizar, etc.) reinicia el contador ──
+        tick = st_autorefresh(interval=60_000, key="idle_tick")  # revisa cada 1 min
+        ahora = time.time()
+        if st.session_state.get("_tick") == tick:      # el rerun lo causó el usuario
+            st.session_state["_ultima_act"] = ahora     #   → hubo actividad
+        st.session_state["_tick"] = tick
+        if ahora - st.session_state.get("_ultima_act", ahora) > _TIMEOUT_SEG:
+            st.session_state.clear()
+            st.session_state["_msg_timeout"] = True
+            st.rerun()
         cabe = st.columns([4, 1])
         cabe[0].caption(f"👤 {st.session_state.get('user', '')}")
         if cabe[1].button("Salir", use_container_width=True):
