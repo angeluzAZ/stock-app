@@ -167,11 +167,19 @@ def _rebuild_consulta(sh):
     comb = pd.concat(partes, ignore_index=True) if partes else pd.DataFrame(columns=COLS)
     con = comb[comb["stock"] != 0].copy()
     _escribir_hoja(sh, "CONSULTA", con)
-    # CONSULTA_OFF: lo que baja la app OFFLINE del celular. SIN proveedor (privado)
-    # y solo los depósitos que se muestran de cada empresa (HZ:1,9,15,8,7 · AZ:2,5).
-    off = con[con.apply(
+    # CONSULTA_OFF: lo que baja la app OFFLINE. SIN proveedor (privado) y solo los
+    # depósitos que se muestran de cada empresa (HZ:1,9,15,8,7 · AZ:2,5).
+    # Incluye TODOS los productos, en forma optimizada: las filas CON stock + 1 fila
+    # por cada producto que está en 0 en todos lados (así también aparece al buscar,
+    # y el celular completa los depósitos en 0 solo). Mucho más liviano que mandar
+    # todas las filas en 0.
+    comb_dep = comb[comb.apply(
         lambda r: str(r["deposito"]).strip() in DEP_POR_EMPRESA.get(r["empresa"], set()),
         axis=1)]
+    nz = comb_dep[comb_dep["stock"] != 0]
+    con_stock = set(nz["codigo"])
+    cero = comb_dep[~comb_dep["codigo"].isin(con_stock)].drop_duplicates("codigo")
+    off = pd.concat([nz, cero], ignore_index=True)
     _escribir_hoja(sh, "CONSULTA_OFF", off[COLS_OFF].copy())
 
 
