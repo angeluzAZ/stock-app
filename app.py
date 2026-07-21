@@ -459,9 +459,10 @@ if modo == "🔍 Buscar":
                    "«Incluir productos sin stock».")
         st.stop()
 
-    # una tarjeta por código (aunque esté en las dos empresas); más stock primero
+    # una tarjeta por código (aunque esté en las dos empresas).
+    # Orden: primero los códigos que EMPIEZAN con lo buscado; luego, más stock primero.
     grupos = list(d.groupby("codigo", sort=False))
-    grupos.sort(key=lambda kv: kv[1]["stock"].sum(), reverse=True)
+    grupos.sort(key=lambda kv: (not kv[0].lower().startswith(t), -kv[1]["stock"].sum()))
     st.caption(f"{len(grupos):,} producto(s)" + (" · mostrando los primeros 150" if len(grupos) > 150 else ""))
 
     cards = []
